@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="Blueprint/Screenshot%20From%202026-06-19%2022-12-47.png" alt="Nifty 100 ETL Pipeline" width="800"/>
-</p>
-
 <h1 align="center">Nifty 100 — Data Ingestion & ETL Pipeline</h1>
 
 <p align="center">
