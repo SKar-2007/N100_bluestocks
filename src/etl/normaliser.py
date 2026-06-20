@@ -20,7 +20,7 @@ def normalize_year(year_val, context=None):
         (r'^(\d{4})\s*[-–]\s*(\d{2})$', lambda m: int(m.group(1))),
         (r'^(\d{4})\s*[-–]\s*(\d{4})$', lambda m: int(m.group(1))),
         (r'^(\d{4})$', lambda m: int(m.group(1))),
-        (r'^(?:Mar|March|Dec|December|Jan|January|Jun|June|Sep|September)?\s*(\d{4})$', lambda m: int(m.group(1))),
+        (r'^(?:(?:Mar|March|Dec|December|Jan|January|Jun|June|Sep|September)[\s-])?(\d{4})$', lambda m: int(m.group(1))),
         (r'^\d{2}[-–]\w{3}[-–](\d{4})$', lambda m: int(m.group(1))),
         (r'^\w{3}[-–]\d{2}[-–](\d{4})$', lambda m: int(m.group(1))),
         (r'^(\d{2})[-–]\d{2}[-–](\d{4})$', lambda m: int(m.group(2))),
