@@ -1,6 +1,7 @@
 import csv
 import logging
 import os
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -84,6 +85,19 @@ COL_MAP = {
         'peer_group_name': 'group_name',
     },
 }
+
+
+def _clean_url(val):
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    if s.lower() == 'null' or s.lower() == 'none' or s.lower() == 'nan':
+        return None
+    if not s.startswith(('http://', 'https://', '//')):
+        s = 'https://' + s
+    return s
 
 
 def get_connection():
@@ -219,6 +233,71 @@ def get_ticker_id_map(conn):
     return dict(conn.execute("SELECT ticker, company_id FROM companies").fetchall())
 
 
+def ensure_companies_exist(conn, ticker_map, df, table_name):
+    ticker_cols = [c for c in df.columns if 'company_id' in c.lower()]
+    if not ticker_cols:
+        return ticker_map
+    tc = ticker_cols[0]
+    new_count = 0
+    for v in df[tc].unique():
+        if pd.isna(v):
+            continue
+        t = normalize_ticker(str(v))
+        if t and t not in ticker_map:
+            conn.execute(
+                "INSERT OR IGNORE INTO companies (company_name, ticker, sector_id, nse_symbol) VALUES (?,?,?,?)",
+                (t, t, 1, t)
+            )
+            ticker_map[t] = conn.execute("SELECT company_id FROM companies WHERE ticker = ?", (t,)).fetchone()[0]
+            new_count += 1
+    if new_count:
+        conn.commit()
+        logger.info(f"Auto-created {new_count} company records from {table_name} data")
+    return ticker_map
+
+
+def parse_analysis_value(val):
+    if pd.isna(val):
+        return None
+    s = str(val).strip()
+    m = re.search(r'([\d.]+)', s)
+    if m:
+        return float(m.group(1))
+    return None
+
+
+def load_analysis_table(conn, df, ticker_map, validator):
+    if df is None or df.empty:
+        return 0, 0
+    df = df.copy()
+    ticker_map = ensure_companies_exist(conn, ticker_map, df, 'analysis')
+    successful = 0
+    for _, r in df.iterrows():
+        raw_ticker = r.get('company_id')
+        if pd.isna(raw_ticker):
+            continue
+        t = normalize_ticker(str(raw_ticker))
+        if not t or t not in ticker_map:
+            continue
+        cid = ticker_map[t]
+        roe = parse_analysis_value(r.get('roe'))
+        sales_gr = parse_analysis_value(r.get('compounded_sales_growth'))
+        profit_gr = parse_analysis_value(r.get('compounded_profit_growth'))
+        price_cagr = parse_analysis_value(r.get('stock_price_cagr'))
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO analysis (company_id, year, return_on_equity, return_on_assets, return_on_capital_employed) VALUES (?,?,?,?,?)",
+                (cid, 2024, roe, sales_gr, profit_gr)
+            )
+            successful += 1
+        except Exception as e:
+            logger.debug(f"Analysis insert error {t}: {e}")
+    conn.commit()
+    loaded = conn.execute("SELECT COUNT(*) FROM analysis").fetchone()[0]
+    logger.info(f"Loaded {loaded} rows into analysis")
+    return loaded, 0
+
+
 def load_peer_groups(conn, df, ticker_map):
     df['company_id'] = df['company_id'].apply(lambda v: ticker_map.get(normalize_ticker(str(v))) if pd.notna(v) else None)
     df = df[df['company_id'].notna()].copy()
@@ -254,17 +333,15 @@ def load_financial_table(conn, table_name, ticker_map, validator):
         return 0, 0
 
     if table_name == 'analysis':
-        logger.info("Skipping analysis table: source format does not match schema")
-        return 0, 0
+        before = len(df)
+        df = df.drop_duplicates(subset=['company_id'], keep='first')
+        return load_analysis_table(conn, df, ticker_map, validator)
 
     if table_name == 'peer_groups':
         return load_peer_groups(conn, df, ticker_map)
 
-    if table_name == 'financial_ratios':
-        before = len(df)
-        df = df.drop_duplicates(subset=['company_id', 'year'], keep='first')
-        if len(df) < before:
-            logger.debug(f"Dropped {before - len(df)} duplicate rows from financial_ratios")
+    # Auto-create company records for tickers in this table that don't exist yet
+    ticker_map = ensure_companies_exist(conn, ticker_map, df, table_name)
 
     df = apply_col_map(df, table_name)
 
@@ -285,12 +362,22 @@ def load_financial_table(conn, table_name, ticker_map, validator):
                 resolved.append(ticker_map.get(t))
         df[tc] = resolved
 
-    # For documents: deduplicate by company_id (schema has UNIQUE company_id)
-    if table_name == 'documents':
+    # Drop duplicate (company_id, year) combos before validation to prevent DQ-01
+    if 'year' in df.columns and 'company_id' in df.columns:
+        before = len(df)
+        df = df.drop_duplicates(subset=['company_id', 'year'], keep='first')
+        if len(df) < before:
+            logger.debug(f"Dropped {before - len(df)} duplicate (company_id, year) rows from {table_name}")
+    elif 'company_id' in df.columns and table_name in ('documents', 'prosandcons', 'peer_groups'):
+        before = len(df)
         df = df.drop_duplicates(subset=['company_id'], keep='first')
-    # For prosandcons: deduplicate by company_id
-    if table_name == 'prosandcons':
-        df = df.drop_duplicates(subset=['company_id'], keep='first')
+        if len(df) < before:
+            logger.debug(f"Dropped {before - len(df)} duplicate company_id rows from {table_name}")
+    elif 'company_id' in df.columns and 'date' in df.columns:
+        before = len(df)
+        df = df.drop_duplicates(subset=['company_id', 'date'], keep='first')
+        if len(df) < before:
+            logger.debug(f"Dropped {before - len(df)} duplicate (company_id, date) rows from {table_name}")
 
     # Drop rows with no company_id
     before = len(df)
@@ -306,6 +393,13 @@ def load_financial_table(conn, table_name, ticker_map, validator):
             logger.debug(f"Dropped {before - len(df)} rows with null year from {table_name}")
 
     df = df.apply(lambda col: col.map(lambda x: None if isinstance(x, float) and pd.isna(x) else x))
+
+    # Clean URL fields for documents table
+    if table_name == 'documents':
+        for col in df.columns:
+            if 'url' in col.lower() or 'link' in col.lower() or 'website' in col.lower():
+                df[col] = df[col].apply(_clean_url)
+
     df = validator.validate_table(table_name, df)
 
     successful = 0

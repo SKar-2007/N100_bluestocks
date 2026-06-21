@@ -26,6 +26,10 @@ def normalize_year(year_val, context=None):
         (r'^(\d{2})[-–]\d{2}[-–](\d{4})$', lambda m: int(m.group(2))),
         (r'^CY(\d{4})$', lambda m: int(m.group(1))),
         (r'^(\d{4})[-–](\d{2})[-–](\d{2})$', lambda m: int(m.group(1))),
+        (r'^TTM$', lambda m: 2024),
+        (r'^(?:Mar|March|Dec|December|Jan|January|Jun|June|Sep|September)[\s-](\d{4})\s+\d+m$', lambda m: int(m.group(1))),
+        (r'^(?:Mar|March|Dec|December|Jan|January|Jun|June|Sep|September)[\s-](\d{4})\s+\d+$', lambda m: int(m.group(1))),
+        (r'^(?:Mar|March|Dec|December|Jan|January|Jun|June|Sep|September)[-](\d{2})$', lambda m: int(m.group(1)) + 2000 if int(m.group(1)) <= 30 else int(m.group(1)) + 1900),
     ]
 
     for pattern, handler in patterns:
@@ -55,7 +59,7 @@ def normalize_ticker(ticker):
 
     while re.search(r'\.(NS|BSE|NSE|BO)$', ticker, flags=re.IGNORECASE):
         ticker = re.sub(r'\.(NS|BSE|NSE|BO)$', '', ticker, flags=re.IGNORECASE)
-    ticker = re.sub(r'^(NSE|BSE|NS|BO)[:\s]*', '', ticker, flags=re.IGNORECASE)
+    ticker = re.sub(r'^(?:NSE|BSE|NS|BO)[:\s]+', '', ticker, flags=re.IGNORECASE)
 
     ticker = re.sub(r'&', 'AND', ticker)
     ticker = re.sub(r'[^A-Z0-9\s-]', '', ticker)
