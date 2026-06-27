@@ -17,11 +17,11 @@ load:
 
 # Execute financial ratio computations
 ratios:
-	$(PYTHON) -c "from src.etl.loader import compute_ratios; compute_ratios()"
+	$(PYTHON) -m src.analytics.engine
 
 # Run unit testing suite
 test:
-	$(PYTHON) -m pytest tests/ -v --cov=src/etl --cov-report=term
+	$(PYTHON) -m pytest tests/ -v --cov=src --cov-report=term
 
 # Generate automated quality and processing logs
 report:

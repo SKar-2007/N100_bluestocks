@@ -1,150 +1,178 @@
-# Blueprint: Sprint 1 — Data Foundation
+# Blueprint: Sprint 2 — Financial Ratio Engine
 
 ## Project Overview & Metadata
-* **Epic:** Epic 01 · Data Ingestion & ETL
-* **Duration:** Day 01 - Day 07
-* **Estimation / Velocity:** 34 Story Points (SP)
+* **Epic:** Epic 02 · Financial Ratio Engine
+* **Duration:** Day 08 — Day 14
+* **Estimation / Velocity:** 42 Story Points (SP)
 * **Target Environment:** Python, SQLite Database (`nifty100.db`)
 
 ---
 
 ## Sprint Goal
-By the end of Sprint 1, the team must have a fully loaded and validated SQLite database (`nifty100.db`) containing all core and supplementary tables derived from 12 source files. All 16 data quality rules must be fully implemented, executed, and any **CRITICAL** failures completely resolved. This sprint establishes the data foundation required for all subsequent modules.
+By end of Sprint 2, the Ratio Engine must compute 50+ KPIs for all 92 companies across all available years. The `financial_ratios` table in SQLite must be fully populated. All formula edge cases (negative equity, debt-free companies, CAGR turnarounds, bank carve-out) must be handled correctly and logged. All KPI formula unit tests must pass.
 
 ---
 
 ## Technical Artifacts & Deliverables
 
-The sprint will deliver the following verified artifacts:
-
 | Artifact Path | Description |
 | :--- | :--- |
-| **`nifty100.db`** | SQLite database with all tables fully populated. |
-| **`db/schema.sql`** | Database schema script defining tables, Primary Keys (PK), and Foreign Keys (FK). |
-| **`src/etl/loader.py`** | Main ETL execution script responsible for reading, staging, and inserting data. |
-| **`src/etl/normaliser.py`** | Utility containing text/ticker and data structure normalization logic. |
-| **`src/etl/validator.py`** | Component containing the implementation of the 16 Data Quality rules. |
-| **`output/load_audit.csv`** | Audit ledger documenting per-table row counts, successful loads, and rejections. |
-| **`output/validation_failures.csv`** | Log of all data quality violations detailed by rule, entity, and severity level. |
-| **`tests/etl/`** | Test suite containing **35+ unit tests** validating parser/loader behavior. |
-| **`notebooks/exploratory_queries.sql`** | Validation script containing exactly **10 exploratory queries** for data verification. |
+| **`src/analytics/ratios.py`** | Profitability, leverage, efficiency ratio functions (Net Profit Margin, OPM, ROE, ROCE, ROA, D/E, ICR, Net Debt, Asset Turnover). |
+| **`src/analytics/cagr.py`** | CAGR engine with 6 edge case handlers (DECLINE_TO_LOSS, TURNAROUND, BOTH_NEGATIVE, ZERO_BASE, INSUFFICIENT). Computes Revenue, PAT, EPS CAGR for 3/5/10yr windows. |
+| **`src/analytics/cashflow_kpis.py`** | CFO Quality Score, CapEx Intensity, FCF Conversion Rate, capital allocation 8-pattern classifier. |
+| **`src/analytics/engine.py`** | Main orchestrator that loads data from `profitandloss`, `balancesheet`, `cashflow`, computes all KPIs, populates `financial_ratios` table, writes `capital_allocation.csv` and `ratio_edge_cases.log`. |
+| **`output/capital_allocation.csv`** | 8-pattern label for every company-year based on (CFO, CFI, CFF) sign. |
+| **`output/ratio_edge_cases.log`** | All anomalous ROCE/ROE cross-checks documented with category (formula discrepancy, data source issue). |
+| **`tests/kpi/`** | 76 unit tests covering ratios, CAGR edge cases, and cash flow KPIs. |
 
 ---
 
 ## Day-by-Day Workflow Breakdown
 
-### 📅 Day 01: Environment Setup & Tooling Foundation
-* **Objective:** Establish the development environment, package management, and common workflows.
+### Day 08: Profitability Ratios
+* **Objective:** Implement core profitability metrics with edge case handling.
 * **Tasks:**
-  * Create core project directory structures (`src/etl/`, `db/`, `output/`, `tests/etl/`, `notebooks/`).
-  * Initialize the python virtual environment (`venv`).
-  * Install **20 required core libraries** for ETL, parsing, and data validation.
-  * Configure project settings and secrets inside a secure `.env` file.
-  * Define and test automated project workflows via **Makefile targets**:
-    * `load` — Triggers full data parsing and insertion.
-    * `ratios` — Executes financial ratio computations.
-    * `test` — Runs the unit testing suite.
-    * `report` — Generates automated quality and processing logs.
-    * `dashboard` — Launches data overview telemetry interfaces.
-    * `api` — Sets up downstream service entry points.
-    * `clean` — Resets temporary build, environment, and database outputs.
+  * Write `src/analytics/ratios.py` — Net Profit Margin: `net_profit / sales * 100`, return None if sales = 0.
+  * Operating Profit Margin — compute and cross-check against `operating_profit_margin` field, log if diff > 1%.
+  * Return on Equity (ROE): `net_profit / (equity_capital + reserves) * 100`, return None if equity+reserves <= 0.
+  * Return on Capital Employed (ROCE): EBIT / (equity + reserves + borrowings) * 100.
+  * For companies in Financials broad_sector — D/E warning flag suppressed.
+  * Return on Assets (ROA): `net_profit / total_assets * 100`, return None if total_assets = 0.
+  * Write 8 unit tests covering normal, zero denominator (None), negative equity (None), OPM cross-check mismatch.
 
-### 📅 Day 02: Excel Loader & Normaliser Development
-* **Objective:** Build robust file parsers capable of cleaning structural irregularities from source records.
+### Day 09: Leverage & Efficiency Ratios
+* **Objective:** Implement debt, coverage, and efficiency metrics.
 * **Tasks:**
-  * Author `src/etl/normaliser.py` and initialize `src/etl/loader.py`.
-  * Implement `normalize_year()` to standardize varying fiscal and chronological year representations across files.
-  * Implement `normalize_ticker()` to clean ticker symbols, prefixes, or format inconsistencies.
-  * Author and execute a comprehensive unit testing suite within `tests/etl/` containing **35+ unit tests** to prevent regression:
-    * **20+ unit tests** dedicated exclusively to `normalize_year`.
-    * **15+ unit tests** dedicated exclusively to `normalize_ticker`.
+  * Debt-to-Equity: `borrowings / (equity_capital + reserves)` — return 0 if borrowings = 0.
+  * D/E flag: if D/E > 5 and company is NOT in Financials — `high_leverage_flag = True`.
+  * Interest Coverage Ratio: `(operating_profit + other_income) / interest` — return None if interest = 0.
+  * For ICR = None (debt-free) — store `icr_label = 'Debt Free'`.
+  * ICR warning flag: if ICR < 1.5 — company at risk.
+  * Net Debt: `borrowings - investments`.
+  * Asset Turnover: `sales / total_assets`, return None if total_assets = 0.
+  * Write 8 unit tests: D/E debt-free returns 0, ICR interest=0 returns None, ICR label = Debt Free, high D/E flag.
 
-### 📅 Day 03: Schema Validator & 16 Data Quality (DQ) Rules
-* **Objective:** Establish strict data guardrails to protect against corrupted or incomplete upstream information.
+### Day 10: CAGR Engine — All Growth Metrics
+* **Objective:** Build CAGR computation with comprehensive edge case handling.
 * **Tasks:**
-  * Develop the data verification matrix inside `src/etl/validator.py` covering **DQ-01 to DQ-16**.
-  * Classify validation failures into strict severity tiers to manage loading exceptions:
-    * **CRITICAL Tier:** Structural errors that block database integrity (e.g., Primary Key violations, Missing Foreign Keys).
-    * **WARNING Tier:** Data anomalies requiring auditing but permitting row stage passage (e.g., Operating Profit Margin cross-checks, Negative sales).
-  * Automatically dump exceptions to `output/validation_failures.csv` containing failure locations and severity metadata.
+  * Write `src/analytics/cagr.py` — CAGR formula: `((end/start)^(1/n) - 1) * 100`.
+  * Revenue CAGR for 3yr, 5yr, 10yr windows.
+  * PAT CAGR for 3yr, 5yr, 10yr windows.
+  * EPS CAGR for 3yr, 5yr, 10yr windows.
+  * Handle 6 edge cases:
+    * Positive+Positive — compute normally
+    * Positive+Negative — return None with flag DECLINE_TO_LOSS
+    * Negative+Positive — return None with flag TURNAROUND
+    * Negative+Negative — return None with flag BOTH_NEGATIVE
+    * Zero base — return None with flag ZERO_BASE
+    * Less than n years — return None with flag INSUFFICIENT
+  * Store CAGR flag alongside value (e.g. `revenue_cagr_5yr_flag`).
+  * Write 10 unit tests: normal CAGR, all 6 edge case flags.
 
-### 📅 Day 04: SQLite Database Schema Design
-* **Objective:** Author the structural blueprints for the storage layer ensuring referential integrity rules are locked down.
+### Day 11: Cash Flow KPIs & Capital Allocation
+* **Objective:** Derive cash flow health metrics and capital allocation patterns.
 * **Tasks:**
-  * Write `db/schema.sql` to map the target relational models.
-  * Explicitly define Primary Keys (PK), Composite Keys, and Foreign Keys (FK) matching the financial domain objects.
-  * Integrate structural validation rules inside `loader.py` to match the target tables.
-  * Enforce strict referential constraints at connection startup by configuring the database engine command:
-    ```sql
-    PRAGMA foreign_keys = ON;
-    ```
+  * Free Cash Flow: `operating_activity + investing_activity`.
+  * CFO Quality Score: CFO/PAT ratio averaged over 5 years — >1.0 = High Quality, 0.5-1.0 = Moderate, <0.5 = Accrual Risk.
+  * CapEx Intensity: `abs(investing_activity) / sales * 100` — <3% = Asset Light, 3-8% = Moderate, >8% = Capital Intensive.
+  * FCF Conversion Rate: `FCF / operating_profit * 100`.
+  * Capital allocation 8-pattern classifier based on sign of (CFO, CFI, CFF):
+    * (+,-,-) = Reinvestor
+    * (+,-,-) with high CFO/PAT = Shareholder Returns
+    * (+,+,-) = Liquidating Assets
+    * (-,+,+) = Distress Signal
+    * (-,-,+) = Growth Funded by Debt
+    * (+,+,+) = Cash Accumulator
+    * (-,-,-) = Pre-Revenue
+    * (+,-,+) = Mixed
+  * Generate `output/capital_allocation.csv`.
 
-### 📅 Day 05: Full Data Load Execution (All 12 Files)
-* **Objective:** Execute the automated pipeline to ingest data in order across all source formats.
+### Day 12: Populate financial_ratios Table
+* **Objective:** Run full ratio engine for all companies, populate SQLite.
 * **Tasks:**
-  * Sequence processing over **12 source files** partitioned into:
-    * **7 Core Excel Files**
-    * **5 Supplementary Files**
-  * Execute ingestion according to a logical, dependency-aware load order to prevent referential key exceptions.
-  * Populate all **10 target tables** (specified across structural contexts as: `companies`, `profitandloss`, `balancesheet`, `cashflow`, `analysis`, `documents`, `prosandcons`, `sectors`, `stock_prices`, `financial_ratios`, and `peer_groups`).
-  * Verify audit metrics against targets in `output/load_audit.csv` ensuring an explicit **Foreign Key check result of 0 (zero errors)**. All **CRITICAL** structural failures must be completely resolved before the end of Day 05.
+  * Run `src/analytics/engine.py` for all 92 companies across all available years.
+  * KPI columns: `net_profit_margin_pct`, `operating_profit_margin_pct`, `return_on_equity_pct`, `debt_to_equity`, `interest_coverage`, `asset_turnover`, `free_cash_flow_cr`, `capex_cr`, `earnings_per_share`, `book_value_per_share`, `dividend_payout_ratio_pct`, `total_debt_cr`, `cash_from_operations_cr`, `revenue_cagr_5yr`, `pat_cagr_5yr`, `eps_cagr_5yr`, `composite_quality_score`.
+  * Verify row count >= 1,100.
+  * Manual spot-check: 3 companies, recompute ROE and 5yr Revenue CAGR — difference < 0.1%.
 
-### 📅 Day 06: Data Quality Manual Review & Edge Case Patching
-* **Objective:** Perform qualitative visual inspections to locate silent bugs or data gaps that automation missed.
+### Day 13: Bank ROCE Carve-Out & Edge Case Log
+* **Objective:** Handle Financials sector exceptions and document anomalies.
 * **Tasks:**
-  * Select **5 random companies** at random and perform full end-to-end trace auditing from source files to database cells.
-  * Conduct an evaluation of historical multi-year coverage.
-  * Scan for and flag data gaps, specifically highlighting companies with **less than 5 years** of historical financial footprints.
-  * Diagnose code flaws, resolve edge-case parsing errors, patch the loader scripts, and execute a complete pipeline re-run to maintain clean state.
+  * For 19 companies in Financials sector — standard D/E warning flag suppressed (high leverage structurally normal).
+  * Cross-check ROCE against `roce_percentage` column in companies.xlsx — log anomalies > 5% diff to `output/ratio_edge_cases.log`.
+  * Cross-check ROE against `roe_percentage` column — note source anomalies (e.g. TCS shows 0.52).
+  * Categorise each anomaly: data source issue, version difference, or formula discrepancy.
 
-### 📅 Day 07: Sprint Wrap-Up, Analytical Validation & Review
-* **Objective:** Sign off on the technical foundations and update sprint tracking telemetry.
+### Day 14: Tests & Sprint Review
+* **Objective:** Final validation and documentation.
 * **Tasks:**
-  * Finalize a suit of analysis scripts inside `notebooks/exploratory_queries.sql` comprising **exactly 10 structural validation queries**.
-  * Validate that the unit test suite registers **0 failures**.
-  * Conduct a live system demonstration of the working `nifty100.db` instance to stakeholders.
-  * Host the Sprint Retrospective session to gather team feedback on pipeline bottlenecks.
-  * Formally close out sprint issues and update the project management board.
+  * Run all KPI formula unit tests — 0 failures.
+  * Review `ratio_edge_cases.log` — all anomalies documented.
+  * Screener: ROE > 15% and D/E < 1 — verify 15-50 companies.
+  * Sprint retrospective — document formula decisions and edge case resolutions.
 
 ---
 
-## Data Quality (DQ) Matrix Rules Summary
+## Datasets Used
 
-The ingestion engine enforces a battery of 16 rules, including but not limited to the following:
+The ratio engine draws from these source files loaded into `nifty100.db`:
 
-| Rule Code | Focus Area | Target Condition / Severity |
+| Source File | Table | Key Columns Used |
 | :--- | :--- | :--- |
-| **DQ-01** | Primary Key Uniqueness | Rejects duplicate identifiers entirely (**CRITICAL**) |
-| **DQ-02** | Composite PK Validation | Validates unique combinations of `(company_id, year)` (**CRITICAL**) |
-| **DQ-03** | Foreign Key Integrity | Validates parent records exist prior to child row writing (**CRITICAL**) |
-| **DQ-04** | Balance Sheet Alignment | Validates Balance Sheet equity and liabilities balance to within `< 1%` (**WARNING**) |
-| **DQ-05** | Operating Profit Margin (OPM) | Cross-checks derived percentages against raw line items (**WARNING**) |
-| **DQ-08** | Revenue Validation | Confirms sales/revenue figures register as positive values (**WARNING**) |
-| **DQ-09 - 16**| Scope Safeguards | Covers constraints on net cash, tax rate, dividend caps, URL valid formats, EPS sign correctness, BSE balance, and general data coverage metrics. |
+| `profitandloss.xlsx` | `profitandloss` | `revenue`, `operating_profit`, `operating_profit_margin`, `other_income`, `interest_expense`, `net_profit`, `eps`, `dividend_payout_ratio` |
+| `balancesheet.xlsx` | `balancesheet` | `share_capital`, `reserves_and_surplus`, `total_debt`, `total_assets`, `investments` |
+| `cashflow.xlsx` | `cashflow` | `cash_from_operations`, `cash_from_investing`, `cash_from_financing` |
+| `companies.xlsx` | `companies` | `ticker`, `face_value`, `roce_percentage`, `roe_percentage` |
+| `sectors.xlsx` | `sectors` | `broad_sector` (for Financials carve-out) |
 
 ---
 
 ## Target Expected Load Volume Telemetry
-The pipeline execution expects the following target metrics during a clean run verification:
 
-* **Source File Count:** 12 Files (7 Core + 5 Supplementary)
-* **Target Table Entities:** 10 Tables
-* **Expected Successful Database Records:**
-  * `companies` = **92 rows**
-  * `profitandloss` (P&L) ~ **1,276 rows**
-  * `balancesheet` (BS) ~ **1,312 rows**
-  * `cashflow` (CF) ~ **1,187 rows**
-  * `stock_prices` = **5,520 rows**
+| Table | Expected Rows | Actual Rows |
+| :--- | :--- | :--- |
+| `companies` | 92 | 101 |
+| `profitandloss` | ~1,276 | 1,165 |
+| `balancesheet` | ~1,312 | 1,137 |
+| `cashflow` | ~1,187 | 1,152 |
+| `financial_ratios` | >= 1,100 | 1,166 |
 
 ---
 
 ## Exit Criteria & Definition of Done (DoD)
 
-To move out of Sprint 1 and authorize subsequent analytics phases, the following checklist must evaluate to 100% compliance:
+- [x] `SELECT COUNT(*) FROM financial_ratios` returns >= 1,100 rows (**1,166 rows**).
+- [x] All 17 KPI columns populated — zero null-only columns.
+- [x] All 176 unit tests pass with 0 failures (35 ETL + 76 KPI + validator tests).
+- [x] Manual spot-check: TCS, RELIANCE, HDFCBANK ROE and 5yr Revenue CAGR verified within 0.1%.
+- [x] `output/ratio_edge_cases.log` exists with documented explanations.
+- [x] `output/capital_allocation.csv` written with 8-pattern labels.
+- [x] Screener (ROE > 15%, D/E < 1) returns 40 companies (within 15-50 range).
+- [x] Sprint 2 review meeting completed and signed off by team lead.
 
-- [ ] **Row Count Match:** `SELECT COUNT(*) FROM companies;` returns exactly **92**.
-- [ ] **Referential Integrity:** `PRAGMA foreign_key_check;` execution yields exactly **0 rows** of errors.
-- [ ] **Rejection Enforcement:** `load_audit.csv` verifies **zero CRITICAL rejections** remaining in the processing engine.
-- [ ] **Test Coverage:** All **35+ ETL unit tests** execute with a status of 100% pass (0 failures).
-- [ ] **Manual Trace Verification:** Review of the 5 selected companies proves perfect accuracy with no truncated data.
-- [ ] **Sprint Sign-Off:** Stakeholder demonstration completed and sprint closure approved.
+---
+
+## Formula Decisions & Edge Case Resolutions
+
+| Metric | Edge Case | Resolution |
+| :--- | :--- | :--- |
+| Net Profit Margin | Sales = 0 | Return None (not zero) |
+| Operating Profit Margin | OPM mismatch > 1% | Log warning only, use computed value |
+| ROE | Equity + Reserves <= 0 | Return None |
+| ROCE | Zero capital employed | Return None |
+| ROA | Total assets = 0 | Return None |
+| Debt-to-Equity | Borrowings = 0 | Return 0.0 (not None) |
+| High Leverage Flag | Financials sector, D/E > 5 | Flag suppressed (bank carve-out) |
+| Interest Coverage Ratio | Interest = 0 | Return None, label 'Debt Free' |
+| ICR Warning | ICR < 1.5 | Flag True |
+| Net Debt | Null borrowings/investments | Treat as 0 |
+| Asset Turnover | Total assets = 0 | Return None |
+| CAGR | Positive->Negative | DECLINE_TO_LOSS flag |
+| CAGR | Negative->Positive | TURNAROUND flag |
+| CAGR | Negative->Negative | BOTH_NEGATIVE flag |
+| CAGR | Start = 0 | ZERO_BASE flag |
+| CAGR | Insufficient data | INSUFFICIENT flag |
+| CFO Quality Score | < 3 years of data | Return None |
+| CapEx Intensity | Sales = 0 | Return None |
+| FCF Conversion Rate | Operating profit = 0 | Return None |
+| ROCE/ROE source cross-check | Diff > 5% | Log to `ratio_edge_cases.log` as formula discrepancy |
